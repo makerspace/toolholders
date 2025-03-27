@@ -1,0 +1,14 @@
+{
+    "active_contours": [
+        3,
+        4
+    ],
+    "label": "Wire cutter",
+    "label_size": "auto",
+    "label_position": null,
+    "overrides": {
+        "max_support_angle": 90
+    },
+    "thickness": 10.0,
+    "url": null
+}

@@ -1,0 +1,11 @@
+{
+    "active_contours": [
+        1
+    ],
+    "label": "Box cutter",
+    "label_size": "auto",
+    "label_position": null,
+    "overrides": null,
+    "thickness": 10.0,
+    "url": null
+}

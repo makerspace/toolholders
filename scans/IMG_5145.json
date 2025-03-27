@@ -1,0 +1,12 @@
+{
+    "active_contours": [
+        4,
+        5
+    ],
+    "label": "RJ45 crimper",
+    "label_size": "auto",
+    "label_position": null,
+    "overrides": null,
+    "thickness": 10.0,
+    "url": "https://www.electrokit.com/en/pressverktyg-rj45"
+}

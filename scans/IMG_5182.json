@@ -1,0 +1,13 @@
+{
+    "active_contours": [
+        5,
+        6,
+        4
+    ],
+    "label": "RJ45 crimper",
+    "label_size": "auto",
+    "label_position": null,
+    "overrides": null,
+    "thickness": 10.0,
+    "url": null
+}

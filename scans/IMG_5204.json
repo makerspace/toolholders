@@ -1,0 +1,13 @@
+{
+    "active_contours": [
+        3,
+        4,
+        2
+    ],
+    "label": "Dupont crimper",
+    "label_size": "auto",
+    "label_position": null,
+    "overrides": null,
+    "thickness": 10.0,
+    "url": null
+}

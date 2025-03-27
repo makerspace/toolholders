@@ -1,0 +1,28 @@
+[project]
+name = "toolholders"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "dataclasses-json>=0.6.7",
+    "dijkstra3d>=1.15.1",
+    "ezdxf>=1.4.0",
+    "flask>=3.1.0",
+    "huggingface-hub>=0.29.3",
+    "joblib>=1.4.2",
+    "matplotlib>=3.10.1",
+    "numpy>=2.2.4",
+    "pillow>=11.1.0",
+    "pyclipr>=0.1.7",
+    "pyqt5>=5.15.11",
+    "rdp>=0.8",
+    "rectpack>=0.2.2",
+    "scikit-image>=0.25.2",
+    "scipy-stubs>=1.15.2.1",
+    "torch>=2.6.0",
+    "torchvision>=0.21.0",
+    "trace-skeleton>=0.1.6",
+    "transformers>=4.39.1",
+    "typing>=3.10.0.0",
+]

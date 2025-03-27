@@ -1,0 +1,13 @@
+{
+    "active_contours": [
+        1,
+        2,
+        3
+    ],
+    "label": "Wire cutters",
+    "label_size": "auto",
+    "label_position": null,
+    "overrides": null,
+    "thickness": 10.0,
+    "url": null
+}

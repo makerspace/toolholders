@@ -1,0 +1,12 @@
+{
+    "active_contours": [
+        4,
+        5
+    ],
+    "label": "Wire stripper",
+    "label_size": "auto",
+    "label_position": null,
+    "overrides": null,
+    "thickness": 10.0,
+    "url": null
+}
