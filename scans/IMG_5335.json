@@ -8,5 +8,6 @@
     "label_position": null,
     "overrides": null,
     "thickness": 31.0,
-    "url": null
+    "url": null,
+    "grid": "ikea_skadis"
 }

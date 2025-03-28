@@ -7,6 +7,6 @@
     "label_position": null,
     "overrides": null,
     "thickness": 16.0,
-    "grid": "elfa_classic",
-    "url": null
+    "url": null,
+    "grid": "elfa_classic"
 }

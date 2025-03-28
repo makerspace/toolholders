@@ -8,6 +8,6 @@
     "label_position": null,
     "overrides": null,
     "thickness": 15.0,
-    "grid": "elfa_classic",
-    "url": "https://www.electrokit.com/en/pressverktyg-rj45"
+    "url": "https://www.electrokit.com/en/pressverktyg-rj45",
+    "grid": "elfa_classic"
 }

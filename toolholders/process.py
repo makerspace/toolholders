@@ -13,6 +13,7 @@ from numpy.typing import NDArray
 import skimage.transform
 import matplotlib.pyplot as plt
 import math
+import itertools
 
 from toolholders.bbox import bbox_area, bbox_union
 from toolholders.geometry import approximate_all, contour_length, interpolate_point_along
@@ -33,6 +34,29 @@ class GridConfig:
     stride: tuple[int,int]
     chessboard: bool
 
+def grid_mounting_holes(
+        grid: GridConfig,
+        grid_size: NDArray,
+        normalized_grid_offset: NDArray,
+) -> tuple[list[tuple[int,int]], NDArray]:
+    assert grid_size.shape == (2,)
+    assert normalized_grid_offset.shape == (2,)
+
+    offset = normalized_grid_offset * np.array(grid.stride) * (2 if grid.chessboard else 1)
+    result = []
+    coords = []
+    for r in range(0, grid_size[0]):
+        for c in range(0, grid_size[1]):
+            if grid.chessboard and (r % 2) == (c % 2):
+                # Grid has a chessboard pattern
+                continue
+
+            p = np.array([r,c]) * grid.stride + offset
+            result.append(p)
+            coords.append((r,c))
+    
+    return coords, np.array(result)
+    
 def find_grid_mounting_holes(valid_position_mask: NDArray, hole_edge_clearance_mm: float, hole_hole_clearance_mm: float, mm2pixels: float, grid: GridConfig, debug: bool=False) -> tuple[list[np.ndarray], float]:
     skeleton_mask = morphology.skeletonize(valid_position_mask)
     distances = distance_transform_edt(~skeleton_mask, return_distances=True)
@@ -60,8 +84,8 @@ def find_grid_mounting_holes(valid_position_mask: NDArray, hole_edge_clearance_m
     grid_size += (grid_size+1) % 2
 
     def find_grid_mounting_holes_with_offset(normalized_grid_offset: tuple[float,float], ax) -> tuple[list[np.ndarray], float]:
-        offset = (size_mm / 2) - grid.stride * ((grid_size-1)//2)
-        offset += normalized_grid_offset * np.array(grid.stride) * 2
+        candidate_holes_grid_coords, candidate_holes = grid_mounting_holes(grid, grid_size, np.array(normalized_grid_offset))
+        candidate_holes += (size_mm / 2) - grid.stride * ((grid_size-1)//2)
 
         # Draw grid
         grid_points = []
@@ -74,27 +98,21 @@ def find_grid_mounting_holes(valid_position_mask: NDArray, hole_edge_clearance_m
         valid_holes = []
         hole_scores = []
         hole_grid_coordinates = []
-        for r in range(0, grid_size[0]):
-            for c in range(0, grid_size[1]):
-                if grid.chessboard and (r % 2) == (c % 2):
-                    # Grid has a chessboard pattern
-                    continue
-
-                p = np.array([r,c]) * grid.stride + offset
+        for grid_coords, p in zip(candidate_holes_grid_coords, candidate_holes):
+            k = snap_to_pixel(p)
+            grid_points.append(p)
+            if sample_mask(valid_position_mask, k):
+                grid_colors.append('green')
+                
                 k = snap_to_pixel(p)
-                grid_points.append(p)
-                if sample_mask(valid_position_mask, k):
-                    grid_colors.append('green')
-                    
-                    k = snap_to_pixel(p)
-                    distance = distances[k[0], k[1]] * pixels2mm # type: ignore
-                    
-                    distance_score = -0.5 * float(distance)**2
-                    valid_holes.append(p)
-                    hole_scores.append(distance_score)
-                    hole_grid_coordinates.append((r, c))
-                else:
-                    grid_colors.append('red')
+                distance = distances[k[0], k[1]] * pixels2mm # type: ignore
+                
+                distance_score = -0.5 * float(distance)**2
+                valid_holes.append(p)
+                hole_scores.append(distance_score)
+                hole_grid_coordinates.append(grid_coords)
+            else:
+                grid_colors.append('red')
         
         def symmetry_score(hole1: int, hole2: int):
             if abs(normalized_grid_offset[1]) > 0.05:
@@ -111,7 +129,7 @@ def find_grid_mounting_holes(valid_position_mask: NDArray, hole_edge_clearance_m
                 return 30
             return 0
 
-        best_hole_indices, best_score = optimize_hole_subset(valid_holes, hole_scores, [40, 100, 0, -60], pixels2mm, symmetry_score)
+        best_hole_indices, best_score = optimize_hole_subset(valid_holes, hole_scores, [40, 100, -40, -60], mm2pixels, symmetry_score)
         best_holes = [valid_holes[idx] for idx in best_hole_indices]
 
         if ax is not None:
@@ -139,9 +157,12 @@ def find_grid_mounting_holes(valid_position_mask: NDArray, hole_edge_clearance_m
                 best_mounting_holes_score = score
                 best_mounting_holes = mounting_holes
     
+    if debug:
+        plt.show()
     return best_mounting_holes, best_mounting_holes_score
 
-def optimize_hole_subset(holes: list[NDArray], intrinsic_scores: list[float], hole_count_scores: list[float], pixels2mm: float, combination_score: Callable[[int,int], float]):
+def optimize_hole_subset(holes: list[NDArray], intrinsic_scores: list[float], hole_count_scores: list[float], mm2pixels: float, combination_score: Callable[[int,int], float]):
+    pixels2mm = 1 / mm2pixels
     best_score = -float('inf')
     best_holes: list[int] = []
     best_convex_hull = 0
@@ -153,43 +174,55 @@ def optimize_hole_subset(holes: list[NDArray], intrinsic_scores: list[float], ho
             combination_cache[i, j] = combination_score(i, j)
 
     # Iterate over all subsets of holes
-    for subset_mask in range(1, 1 << len(holes)):
-        subset_indices = [idx for idx in range(len(holes)) if (subset_mask & (1 << idx)) != 0]
+    print(f"Optimizing {len(holes)} holes")
 
-        score = 0 # unit: square millimeters
-        convex_hull_area = 0
-        area_score = 0
-        # Convex hull
-        if len(subset_indices) >= 3:
-            subset_holes = [holes[i] for i in subset_indices]
-            try:
-                hull = ConvexHull(subset_holes)
-                convex_hull_vertices = np.array([subset_holes[i] for i in hull.vertices])
-                convex_hull_area = polyArea(convex_hull_vertices) * pixels2mm * pixels2mm
-            except QhullError:
-                # Likely all points are collinear
-                convex_hull_area = 0
-            area_score += 1.0 * math.sqrt(convex_hull_area)
+    # for subset_mask in range(1, 1 << len(holes)):
+    for n in range(1, 5):
+        for subset_indices in itertools.combinations(range(len(holes)), n):
+            subset_indices = list(subset_indices)
+            # subset_indices = [idx for idx in range(len(holes)) if (subset_mask & (1 << idx)) != 0]
 
-        # First two holes are good, but if we get more than 3 holes, we get a penalty
-        intrinsic_score = np.sum(intrinsic_scores_arr[subset_indices])
-        count_score = 0
-        symmetry_score = 0
+            score = 0 # unit: square millimeters
+            convex_hull_area = 0
+            area_score = 0
+            # Convex hull
+            area_weight = 5.0
+            if len(subset_indices) >= 3:
+                subset_holes = [holes[i] for i in subset_indices]
+                try:
+                    hull = ConvexHull(subset_holes)
+                    convex_hull_vertices = np.array([subset_holes[i] for i in hull.vertices])
+                    convex_hull_area = polyArea(convex_hull_vertices) * pixels2mm * pixels2mm
+                except QhullError:
+                    # Likely all points are collinear
+                    convex_hull_area = 0
+                area_score += area_weight * math.sqrt(convex_hull_area)
+            elif len(subset_indices) == 2:
+                # Two points, create a small support area based on the distance between them
+                support_width_mm = 5
+                p1 = holes[subset_indices[0]]
+                p2 = holes[subset_indices[1]]
+                area_score += area_weight * math.sqrt(np.linalg.norm(p1 - p2) * pixels2mm * support_width_mm)
 
-        for subset_hole_index, hole_index in enumerate(subset_indices):
-            count_score += hole_count_scores[min(subset_hole_index, len(hole_count_scores)-1)]
-            symmetry_score += np.sum(combination_cache[hole_index, subset_indices])
-        
-        score += intrinsic_score
-        score += area_score
-        score += count_score
-        score += symmetry_score
+            # First two holes are good, but if we get more than 3 holes, we get a penalty
+            intrinsic_score = np.sum(intrinsic_scores_arr[subset_indices])
+            count_score = 0
+            symmetry_score = 0
 
-        if score > best_score:
-            print(f"I: {intrinsic_score} A: {area_score} C: {count_score} S: {symmetry_score} => {score}")
-            best_score = score
-            best_holes = subset_indices
-            best_convex_hull = convex_hull_area
+            for subset_hole_index, hole_index in enumerate(subset_indices):
+                count_score += hole_count_scores[min(subset_hole_index, len(hole_count_scores)-1)]
+                symmetry_score += np.sum(combination_cache[hole_index, subset_indices])
+            
+            score += intrinsic_score
+            score += area_score
+            score += count_score
+            score += symmetry_score
+
+            if score > best_score:
+                print(f"I: {intrinsic_score} A: {area_score} C: {count_score} S: {symmetry_score} => {score}")
+                best_score = score
+                best_holes = subset_indices
+                best_convex_hull = convex_hull_area
         
     return best_holes, float(best_score)
 

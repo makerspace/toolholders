@@ -9,7 +9,7 @@
     "overrides": {
         "max_support_angle": 90
     },
-    "grid": "elfa_classic",
     "thickness": 10.1,
-    "url": null
+    "url": null,
+    "grid": "elfa_classic"
 }

@@ -336,19 +336,24 @@ def process_image(image_path: str, config: Config, toolholder: ToolholderSetting
     # Approximate contours
     approx_contours = approximate_all(find_contours(mask), config.contour_smoothing)
 
-    # TODO: Run calculations for each region separately
-    skeleton = trace_skeleton.from_numpy(support_mask_smooth)
-    # Change x,y to row,col
-    skeleton = [np.array([[p[1], p[0]] for p in contour]) for contour in skeleton]
-    holes = hole_positions(skeleton, config.assembly_hole_margin_from_edge_mm, config.assembly_hole_max_distance_mm, mm2pixels)
-    
-    support_mask_with_holes = support_mask_smooth.copy()
-    for h in holes:
-        support_mask_with_holes[int(h[0]), int(h[1])] = False
-    support_mask_with_holes = morphology.binary_erosion(support_mask_with_holes, morphology.disk(millimeters(3)))
-    skeleton2 = trace_skeleton.from_numpy(support_mask_with_holes)
-    skeleton2 = [np.array([[p[1], p[0]] for p in contour]) for contour in skeleton2]
-    tiny_label_positions = hole_positions(skeleton2, 10000, 10000, mm2pixels)
+    # Run calculations for each region separately, as they are independent
+    suppport_mask_labels: NDArray = morphology.label(support_mask_smooth) # type: ignore
+    holes = []
+    tiny_label_positions = []
+    for i in range(1, suppport_mask_labels.max() + 1):
+        support_mask_region = suppport_mask_labels == i
+        skeleton = trace_skeleton.from_numpy(support_mask_region)
+        # Change x,y to row,col
+        skeleton = [np.array([[p[1], p[0]] for p in contour]) for contour in skeleton]
+        region_holes = hole_positions(skeleton, config.assembly_hole_margin_from_edge_mm, config.assembly_hole_max_distance_mm, mm2pixels)
+        holes.extend(region_holes)
+        
+        for h in region_holes:
+            support_mask_region[int(h[0]), int(h[1])] = False
+        support_mask_region = morphology.binary_erosion(support_mask_region, morphology.disk(millimeters(3)))
+        skeleton2 = trace_skeleton.from_numpy(support_mask_region)
+        skeleton2 = [np.array([[p[1], p[0]] for p in contour]) for contour in skeleton2]
+        tiny_label_positions.extend(hole_positions(skeleton2, 10000, 10000, mm2pixels, max_holes=1))
 
     all_shapes = []
     assert len(outline_contours) == 1
@@ -358,11 +363,11 @@ def process_image(image_path: str, config: Config, toolholder: ToolholderSetting
     if toolholder.grid == GridType.IkeaSkadis:
         grid_config = GridConfig((20,20), True)
     elif toolholder.grid == GridType.ElfaClassic:
-        grid_config = GridConfig((12,32), False)
+        grid_config = GridConfig((32,12), False)
     else:
         raise ValueError("Unknown grid type")
 
-    best_mounting_holes, best_mounting_holes_score = find_grid_mounting_holes(outline_mask & ~mask & ~support_mask_smooth & ~cover_mask & ~label_mask, config.mounting_hole_clearance_mm, config.mounting_hole_min_distance_mm, mm2pixels, grid_config)
+    best_mounting_holes, best_mounting_holes_score = find_grid_mounting_holes(outline_mask & ~mask & ~support_mask_smooth & ~cover_mask & ~label_mask, config.mounting_hole_clearance_mm, config.mounting_hole_min_distance_mm, mm2pixels, grid_config, debug=False)
 
     # plt.show()
     # plt.close(fig)
@@ -371,7 +376,7 @@ def process_image(image_path: str, config: Config, toolholder: ToolholderSetting
 
     mounting_hole_shapes = [Shape(circle(hole, config.hole_through_diameter_mm/2, config.hole_resolution), ShapeType.Cut) for hole in best_mounting_holes]
     text_curves = Text(toolholder.label, label_font, AffineTransform.translate(np.array(bbox_center(label_bbox)) * pixels2mm), ShapeType.EngraveFill, anchor="mm").to_curves(0.01)
-    tiny_label_text = os.path.basename(os.path.splitext(image_path)[0]).split("_")[-1]
+    tiny_label_text = toolholder.label[0] + os.path.basename(os.path.splitext(image_path)[0]).split("_")[-1][1:]
 
     all_shapes.append(Group([
         *[Shape(contour * pixels2mm, ShapeType.Cut) for contour in outline_contours],
