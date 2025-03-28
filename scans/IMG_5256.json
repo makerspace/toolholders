@@ -6,6 +6,7 @@
     "label_size": "auto",
     "label_position": null,
     "overrides": null,
-    "thickness": 10.0,
+    "thickness": 16.0,
+    "grid": "elfa_classic",
     "url": null
 }

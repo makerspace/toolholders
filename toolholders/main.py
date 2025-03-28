@@ -13,7 +13,7 @@ from dataclasses_json import DataClassJsonMixin
 import numpy as np
 from skimage import filters, morphology
 from skimage.segmentation import flood_fill
-from skimage.measure import regionprops, find_contours
+from skimage.measure import regionprops, find_contours, grid_points_in_poly
 import skimage.transform
 import math
 import matplotlib.pyplot as plt
@@ -23,14 +23,19 @@ import trace_skeleton
 import argparse
 import os
 from numpy.typing import NDArray
+import matplotlib
 
 from toolholders.export import export_dxf
 from toolholders.geometry import approximate_all, circle, point_in_polygon
 from toolholders.morphology import crop_to_bbox, crop_to_fit_bbox, dilate_direction, triangle_footprint
 from toolholders.pack import move_packed_shapes, pack_shapes, rotate_shape_to_minimize_bbox
-from toolholders.process import LabelPosition, find_grid_mounting_holes, find_symmetric_axis, hole_positions, place_label, roll_centroid_to_center, segment_image
+from toolholders.process import GridConfig, LabelPosition, find_grid_mounting_holes, find_symmetric_axis, hole_positions, place_label, roll_centroid_to_center, segment_image
 from toolholders.shapes import AffineTransform, Group, Shape, ShapeType, Text
 t1 = time.time()
+
+# Use tk
+# matplotlib.use('tkagg')
+
 print(f"Import took {t1-t0:.2f}")
 
 def leftmost_object(mask) -> NDArray:
@@ -77,6 +82,10 @@ class Config:
 class DebugConfig:
     show_contours: bool = False
 
+class GridType(Enum):
+    IkeaSkadis = "ikea_skadis"
+    ElfaClassic = "elfa_classic"
+
 @dataclass
 class ToolholderSettings(DataClassJsonMixin):
     active_contours: list[int] | None = None
@@ -86,6 +95,7 @@ class ToolholderSettings(DataClassJsonMixin):
     overrides: dict[str, str | float | int | bool] | None = None
     thickness: float | None = 10.0
     url: str | None = None
+    grid: GridType = GridType.IkeaSkadis
 
 def segment_image_cached(image_path: str, high_quality: bool):
     t0 = time.time()
@@ -284,6 +294,7 @@ def process_image(image_path: str, config: Config, toolholder: ToolholderSetting
         toolholder.label_size = "auto"
     
     label_font = ImageFont.truetype("./BebasNeue-Regular.ttf", 20)
+    tiny_font = ImageFont.truetype("./BebasNeue-Regular.ttf", 5)
 
     if toolholder.label is None:
         f, ax = plt.subplots()
@@ -325,17 +336,33 @@ def process_image(image_path: str, config: Config, toolholder: ToolholderSetting
     # Approximate contours
     approx_contours = approximate_all(find_contours(mask), config.contour_smoothing)
 
+    # TODO: Run calculations for each region separately
     skeleton = trace_skeleton.from_numpy(support_mask_smooth)
     # Change x,y to row,col
     skeleton = [np.array([[p[1], p[0]] for p in contour]) for contour in skeleton]
     holes = hole_positions(skeleton, config.assembly_hole_margin_from_edge_mm, config.assembly_hole_max_distance_mm, mm2pixels)
+    
+    support_mask_with_holes = support_mask_smooth.copy()
+    for h in holes:
+        support_mask_with_holes[int(h[0]), int(h[1])] = False
+    support_mask_with_holes = morphology.binary_erosion(support_mask_with_holes, morphology.disk(millimeters(3)))
+    skeleton2 = trace_skeleton.from_numpy(support_mask_with_holes)
+    skeleton2 = [np.array([[p[1], p[0]] for p in contour]) for contour in skeleton2]
+    tiny_label_positions = hole_positions(skeleton2, 10000, 10000, mm2pixels)
 
     all_shapes = []
     assert len(outline_contours) == 1
 
     hole_shapes_thread = [Shape(circle(hole * pixels2mm, config.hole_thread_diameter_mm/2, config.hole_resolution), ShapeType.Cut) for hole in holes]
 
-    best_mounting_holes, best_mounting_holes_score = find_grid_mounting_holes(outline_mask & ~mask & ~support_mask_smooth & ~cover_mask & ~label_mask, config.mounting_hole_clearance_mm, config.mounting_hole_min_distance_mm, mm2pixels)
+    if toolholder.grid == GridType.IkeaSkadis:
+        grid_config = GridConfig((20,20), True)
+    elif toolholder.grid == GridType.ElfaClassic:
+        grid_config = GridConfig((12,32), False)
+    else:
+        raise ValueError("Unknown grid type")
+
+    best_mounting_holes, best_mounting_holes_score = find_grid_mounting_holes(outline_mask & ~mask & ~support_mask_smooth & ~cover_mask & ~label_mask, config.mounting_hole_clearance_mm, config.mounting_hole_min_distance_mm, mm2pixels, grid_config)
 
     # plt.show()
     # plt.close(fig)
@@ -344,6 +371,8 @@ def process_image(image_path: str, config: Config, toolholder: ToolholderSetting
 
     mounting_hole_shapes = [Shape(circle(hole, config.hole_through_diameter_mm/2, config.hole_resolution), ShapeType.Cut) for hole in best_mounting_holes]
     text_curves = Text(toolholder.label, label_font, AffineTransform.translate(np.array(bbox_center(label_bbox)) * pixels2mm), ShapeType.EngraveFill, anchor="mm").to_curves(0.01)
+    tiny_label_text = os.path.basename(os.path.splitext(image_path)[0]).split("_")[-1]
+
     all_shapes.append(Group([
         *[Shape(contour * pixels2mm, ShapeType.Cut) for contour in outline_contours],
         *[Shape(contour * pixels2mm, ShapeType.EngraveOutline) for contour in approx_contours],
@@ -351,6 +380,10 @@ def process_image(image_path: str, config: Config, toolholder: ToolholderSetting
         *hole_shapes_thread,
         *mounting_hole_shapes,
         text_curves,
+        *[
+            Text(tiny_label_text, tiny_font, AffineTransform.translate(np.array(label_pos) * pixels2mm), ShapeType.EngraveOutline, anchor="mm").to_curves(0.01)
+            for label_pos in tiny_label_positions
+        ]
     ]))
 
     if toolholder.thickness is None:
@@ -366,20 +399,23 @@ def process_image(image_path: str, config: Config, toolholder: ToolholderSetting
             break
 
 
-    for contour in support_contours:
-        for _ in range(int(max(1, math.ceil(toolholder.thickness / config.material_thickness)))):
-            all_shapes.append(Group([
+    support_count = int(max(1, math.ceil(toolholder.thickness / config.material_thickness)))
+    for (duplicates, contours) in [(support_count, support_contours), (1, cover_contours)]:
+        mirror = AffineTransform.mirror_horizontal()
+        for contour in contours:
+            shape = Group([
                 Shape(contour * pixels2mm, ShapeType.Cut),
-                *[Shape(circle(hole * pixels2mm, config.hole_through_diameter_mm/2, config.hole_resolution), ShapeType.Cut) for hole in holes if point_in_polygon(hole, contour)]
-            ]))
-    
-    for contour in cover_contours:
-        all_shapes.append(Group([
-            Shape(contour * pixels2mm, ShapeType.Cut),
-            *[Shape(circle(hole * pixels2mm, config.hole_through_diameter_mm/2, config.hole_resolution), ShapeType.Cut) for hole in holes if point_in_polygon(hole, contour)]
-        ]))
-
-
+                *[Shape(circle(hole * pixels2mm, config.hole_through_diameter_mm/2, config.hole_resolution), ShapeType.Cut) for hole in holes if point_in_polygon(hole, contour)],
+                *[
+                    # Mirror the text. It will get mirrored again later so that it's actually readable
+                    Text(tiny_label_text, tiny_font, mirror, ShapeType.EngraveOutline, anchor="mm")
+                    .to_curves(0.01)
+                    .with_transform(AffineTransform.translate(np.array(label_pos) * pixels2mm))
+                    for label_pos in tiny_label_positions if point_in_polygon(label_pos, contour)
+                ]
+            ]).with_transform(mirror)
+            for _ in range(duplicates):
+                all_shapes.append(shape)
 
     # Draw packed shapes
     packing_margin = 2
@@ -457,7 +493,7 @@ config = Config(
     max_support_angle=75,
     cover_thickness_mm=18,
     contour_smoothing=0.3,
-    material_thickness=4,
+    material_thickness=6,
     high_quality=False,
 )
 

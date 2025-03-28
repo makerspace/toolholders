@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 import math
 from typing import Sequence
@@ -62,6 +62,10 @@ class AffineTransform:
         return AffineTransform(np.array([[1, 0, p[0]], [0, 1, p[1]], [0, 0, 1]]))
 
     @staticmethod
+    def mirror_horizontal() -> "AffineTransform":
+        return AffineTransform(np.array([[-1, 0, 0], [0, 1, 0], [0, 0, 1]]))
+
+    @staticmethod
     def rotate(angle: float) -> "AffineTransform":
         return AffineTransform(np.array([[math.cos(angle), -math.sin(angle), 0], [math.sin(angle), math.cos(angle), 0], [0, 0, 1]]))
     
@@ -84,6 +88,9 @@ class Shape:
 
     def bbox(self) -> BBox:
         return polygon_bbox(self.contour)
+    
+    def with_transform(self, transform: AffineTransform) -> "Shape":
+        return Shape(transform.apply(self.contour), self.type)
 
 scaled_font_cache = {}
 
@@ -127,6 +134,9 @@ class Text:
     def bbox(self) -> BBox:
         bbox = self.font.getbbox(self.text, anchor=self.anchor)
         return self.transform.apply_bbox(bbox)
+    
+    def with_transform(self, transform: AffineTransform) -> "Text":
+        return replace(self, transform=transform * self.transform)
 
 
 @dataclass
@@ -135,6 +145,9 @@ class Group:
 
     def rotated(self, angle: float) -> "Group":
         return Group([child.rotated(angle) for child in self.children])
+
+    def with_transform(self, transform: AffineTransform) -> "Group":
+        return Group([child.with_transform(transform) for child in self.children])
 
     def bbox(self) -> BBox:
         return bbox_unions([child.bbox() for child in self.children])

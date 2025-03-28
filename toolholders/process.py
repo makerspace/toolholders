@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from enum import Enum
 from typing import Callable
 from joblib import Memory
@@ -27,7 +28,12 @@ class LabelPosition(Enum):
 def polyArea(points: np.ndarray) -> float:
     return 0.5*np.abs(np.dot(points[:,0],np.roll(points[:,1],1))-np.dot(points[:,1],np.roll(points[:,0],1)))
 
-def find_grid_mounting_holes(valid_position_mask: NDArray, hole_edge_clearance_mm: float, hole_hole_clearance_mm: float, mm2pixels: float, debug: bool=False) -> tuple[list[np.ndarray], float]:
+@dataclass
+class GridConfig:
+    stride: tuple[int,int]
+    chessboard: bool
+
+def find_grid_mounting_holes(valid_position_mask: NDArray, hole_edge_clearance_mm: float, hole_hole_clearance_mm: float, mm2pixels: float, grid: GridConfig, debug: bool=False) -> tuple[list[np.ndarray], float]:
     skeleton_mask = morphology.skeletonize(valid_position_mask)
     distances = distance_transform_edt(~skeleton_mask, return_distances=True)
     valid_position_mask = morphology.isotropic_erosion(valid_position_mask, mm2pixels*hole_edge_clearance_mm)
@@ -49,14 +55,13 @@ def find_grid_mounting_holes(valid_position_mask: NDArray, hole_edge_clearance_m
         return np.array([r, c])
 
     size_mm = np.array(valid_position_mask.shape) / mm2pixels
-    grid_stride = (20, 20)
-    grid_size = (size_mm/grid_stride).astype(int) + 2
+    grid_size = (size_mm/grid.stride).astype(int) + 2
     # Ensure grid size is odd
     grid_size += (grid_size+1) % 2
 
     def find_grid_mounting_holes_with_offset(normalized_grid_offset: tuple[float,float], ax) -> tuple[list[np.ndarray], float]:
-        offset = (size_mm / 2) - grid_stride * ((grid_size-1)//2)
-        offset += normalized_grid_offset * np.array(grid_stride) * 2
+        offset = (size_mm / 2) - grid.stride * ((grid_size-1)//2)
+        offset += normalized_grid_offset * np.array(grid.stride) * 2
 
         # Draw grid
         grid_points = []
@@ -71,11 +76,11 @@ def find_grid_mounting_holes(valid_position_mask: NDArray, hole_edge_clearance_m
         hole_grid_coordinates = []
         for r in range(0, grid_size[0]):
             for c in range(0, grid_size[1]):
-                if (r % 2) == (c % 2):
-                    # Grid has a diamond pattern
+                if grid.chessboard and (r % 2) == (c % 2):
+                    # Grid has a chessboard pattern
                     continue
 
-                p = np.array([r,c]) * grid_stride + offset
+                p = np.array([r,c]) * grid.stride + offset
                 k = snap_to_pixel(p)
                 grid_points.append(p)
                 if sample_mask(valid_position_mask, k):
@@ -188,7 +193,7 @@ def optimize_hole_subset(holes: list[NDArray], intrinsic_scores: list[float], ho
         
     return best_holes, float(best_score)
 
-def hole_positions(skeleton: list[np.typing.NDArray], distance: float, max_hole_distance: float, mm2pixels: float) -> list[np.ndarray]:
+def hole_positions(skeleton: list[np.typing.NDArray], distance: float, max_hole_distance: float, mm2pixels: float, max_holes: int | None = None) -> list[np.ndarray]:
     points = []
     for contour in skeleton:
         total_length = contour_length(contour)
@@ -215,7 +220,14 @@ def hole_positions(skeleton: list[np.typing.NDArray], distance: float, max_hole_
             return -10
         return 0
 
-    hole_indices, best_score = optimize_hole_subset(points_filtered, [0] * len(points_filtered), [40, 100, -30, -100], mm2pixels, distance_score)
+    count_scores = [40.0, 100, -30, -100]
+    if max_holes is not None:
+        while len(count_scores) < max_holes+1:
+            count_scores.append(count_scores[-1])
+        count_scores = count_scores[:max_holes+1]
+        count_scores[-1] = -float('inf')
+
+    hole_indices, best_score = optimize_hole_subset(points_filtered, [0] * len(points_filtered), count_scores, mm2pixels, distance_score)
     best_holes = [points_filtered[idx] for idx in hole_indices]
     return best_holes
 
