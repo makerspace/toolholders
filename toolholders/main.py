@@ -95,7 +95,7 @@ class ToolholderSettings(DataClassJsonMixin):
     overrides: dict[str, str | float | int | bool] | None = None
     thickness: float | None = 10.0
     url: str | None = None
-    grid: GridType = GridType.IkeaSkadis
+    grid: GridType | None = None
 
 def segment_image_cached(image_path: str, high_quality: bool):
     t0 = time.time()
@@ -116,6 +116,17 @@ def segment_image_cached(image_path: str, high_quality: bool):
 def process_image(image_path: str, config: Config, toolholder: ToolholderSettings, debug: DebugConfig) -> ToolholderSettings:
     if toolholder.overrides is not None:
         config = replace(config, **toolholder.overrides)
+
+    if toolholder.grid is None:
+        while True:
+            grid_choice = input("Which mounting grid should be used? [1] IKEA Skadis, [2] Elfa Classic:\n").strip()
+            if grid_choice == "1":
+                toolholder.grid = GridType.IkeaSkadis
+                break
+            if grid_choice == "2":
+                toolholder.grid = GridType.ElfaClassic
+                break
+            print("Invalid grid. Enter 1 for IKEA Skadis or 2 for Elfa Classic.")
 
     masked_image, grayscale_mask = segment_image_cached(image_path, high_quality=config.high_quality)
     mask = grayscale_mask > 128
@@ -502,7 +513,7 @@ config = Config(
     high_quality=False,
 )
 
-def process(p: str, debug_options: DebugConfig):
+def process(p: str, debug_options: DebugConfig, grid: GridType | None = None):
     config_path = os.path.splitext(p)[0] + ".json"
     toolholder_config = ToolholderSettings()
     if os.path.exists(config_path):
@@ -511,6 +522,9 @@ def process(p: str, debug_options: DebugConfig):
                 toolholder_config = ToolholderSettings.from_json(f.read())
             except Exception as e:
                 print("Failed to load config. Using default")
+
+    if grid is not None:
+        toolholder_config.grid = grid
 
     toolholder_config = process_image(p, config, toolholder_config, debug_options)
 
@@ -522,12 +536,18 @@ if __name__ == "__main__":
     parser.add_argument("image", help="Path to the image to process")
     parser.add_argument("--show", help="Show the result", action="store_true")
     parser.add_argument("--hq", help="Use high quality mode", action="store_true")
+    parser.add_argument(
+        "--grid",
+        choices=[grid_type.value for grid_type in GridType],
+        help="Mounting grid to use",
+    )
 
     args = parser.parse_args()
     for directory in ("cache", "output", "contours"):
         os.makedirs(directory, exist_ok=True)
     debug_options = DebugConfig(show_contours=args.show)
     image_path = args.image
+    selected_grid = GridType(args.grid) if args.grid is not None else None
     if args.hq:
         config = replace(config, high_quality=True)
 
@@ -537,9 +557,9 @@ if __name__ == "__main__":
                 p = os.path.join(image_path, file)
                 print("Processing", p)
                 try:
-                    toolholder = process(p, debug_options)
+                    toolholder = process(p, debug_options, selected_grid)
                 except Exception as e:
                     print("Failed to process", p)
                     print(e)
     else:
-        toolholder = process(image_path, debug_options)
+        toolholder = process(image_path, debug_options, selected_grid)
