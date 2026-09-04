@@ -524,6 +524,8 @@ if __name__ == "__main__":
     parser.add_argument("--hq", help="Use high quality mode", action="store_true")
 
     args = parser.parse_args()
+    for directory in ("cache", "output", "contours"):
+        os.makedirs(directory, exist_ok=True)
     debug_options = DebugConfig(show_contours=args.show)
     image_path = args.image
     if args.hq:
